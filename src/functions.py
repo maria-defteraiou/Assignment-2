@@ -1,5 +1,8 @@
 
 # Import necessary libraries
+import numpy as np
+import pandas as pd
+import warnings
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -10,9 +13,6 @@ from sklearn.metrics import (
     f1_score, fbeta_score, recall_score, precision_score, 
     confusion_matrix, make_scorer, average_precision_score
 )
-import numpy as np
-import pandas as pd
-import warnings
 
 # Function for loading data and label encoding
 def load_data(path):
