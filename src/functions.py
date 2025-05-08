@@ -1,6 +1,5 @@
 
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
+# Import necessary libraries
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -13,7 +12,58 @@ from sklearn.metrics import (
 )
 import numpy as np
 import pandas as pd
+import warnings
 
+# Function for loading data and label encoding
+def load_data(path):
+    df = pd.read_csv(path)
+    X = df.drop(columns=['diagnosis']).apply(pd.to_numeric, errors='coerce')
+    y = LabelEncoder().fit_transform(df['diagnosis'])
+    return X.values, y
+
+# Function to compute bootstrap confidence intervals for the median 
+def bootstrap_median_CI(data, n_bootstrap=1000, ci=95, random_state=42):
+    """
+    Compute the bootstrap confidence interval around the median.
+    """
+    np.random.seed(random_state)
+    medians = []
+    n = len(data)
+    for _ in range(n_bootstrap):
+        sample = np.random.choice(data, size=n, replace=True)
+        medians.append(np.median(sample))
+    
+    lower_bound = np.percentile(medians, (100 - ci) / 2)
+    upper_bound = np.percentile(medians, 100 - (100 - ci) / 2)
+    median = np.median(data)
+    
+    return median, lower_bound, upper_bound
+
+# Function to generate a table of median and confidence intervals
+def generate_median_CI_table(model_runner, n_bootstrap=1000):
+    """
+    Generate a table of Model - Metric - Median - Lower CI - Upper CI
+    """
+    rows = []
+    
+    for model_name, metrics in model_runner.results.items():
+        for metric_name, metric_values in metrics.items():
+            all_values = metric_values['all']
+            median, lower_ci, upper_ci = bootstrap_median_CI(all_values, n_bootstrap=n_bootstrap)
+            
+            row = {
+                "Model": model_name,
+                "Metric": metric_name,
+                "Median": median,
+                "95% CI Lower": lower_ci,
+                "95% CI Upper": upper_ci
+            }
+            rows.append(row)
+    
+    df_median_ci = pd.DataFrame(rows)
+    return df_median_ci
+
+# Class for Nested Repeated Cross-Validation
 class nrCV:
     def __init__(self, dataset, estimators, hyperparameters, rounds=10, N=5, K=3, 
                  inner_metric="f1_macro", scoring_strategy="macro"):
@@ -39,7 +89,8 @@ class nrCV:
         self.inner_metric = inner_metric
         self.scoring_strategy = scoring_strategy
         self.results = {}
-
+    
+    # Function to compute metrics on outer test set
     def compute_outer_metrics(self, y_true, y_pred, y_proba):
         """Compute metrics on outer test set."""
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel() if len(np.unique(y_true)) == 2 else [0,0,0,0]
@@ -58,14 +109,15 @@ class nrCV:
             "AUC": roc_auc_score(y_true, y_proba, multi_class='ovr' if len(np.unique(y_true)) > 2 else 'raise', average=self.scoring_strategy),
             "PR-AUC": average_precision_score(y_true, y_proba, average=self.scoring_strategy),
         }
-
+    # Function to train models using nested cross-validation
     def train(self):
         for name, estimator in self.estimators:
             param_grid = self.hyperparameters.get(name, {})
             all_metrics = []
 
             for rnd in range(self.rounds):
-                outer_cv = KFold(n_splits=self.N, shuffle=True, random_state=rnd+42)
+                outer_cv = KFold(n_splits=self.N, shuffle=True, random_state=rnd+42) # random_state for reproducibility
+                # Inner CV for hyperparameter tuning 
                 inner_cv = KFold(n_splits=self.K, shuffle=True, random_state=rnd+42)
 
                 for train_idx, test_idx in outer_cv.split(self.X, self.y):
@@ -84,6 +136,9 @@ class nrCV:
 
                     clf = GridSearchCV(estimator=pipe, param_grid=param_grid_pipe,
                                     cv=inner_cv, scoring=self.inner_metric)
+                    # Suppress warnings from GridSearchCV 
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
                     clf.fit(X_train, y_train)
 
                     best_model = clf.best_estimator_
@@ -106,6 +161,7 @@ class nrCV:
 
             self.results[name] = final_scores
 
+    # Function to print summary of results
     def summary(self):
         for name, metrics in self.results.items():
             print(f"Model: {name}")
@@ -113,27 +169,41 @@ class nrCV:
                 print(f"  {metric}: Mean = {values['mean']:.4f} | Std = {values['std']:.4f}")
             print("-" * 50)
 
+# Function to select the best model based on metrics
+def winner_model_selection(csv_path, primary_metric='MCC', secondary_metric='AUC'):
+    
+    # Load metrics summary CSV
+    df = pd.read_csv(csv_path)
 
+    # Select primary metric (MCC)
+    df_primary = df[df['Metric'] == primary_metric]
+    df_primary = df_primary.sort_values(by='Median', ascending=False).reset_index(drop=True)
 
-def load_data(path):
-    df = pd.read_csv(path)
-    X = df.drop(columns=['diagnosis']).apply(pd.to_numeric, errors='coerce')
-    y = LabelEncoder().fit_transform(df['diagnosis'])
-    return X.values, y
+    top1 = df_primary.iloc[0]
+    top2 = df_primary.iloc[1]
 
-X, y = load_data("../data/breast_cancer_final.csv")
+    print(f"Checking {primary_metric} first...")
+    print(f"Top 1: {top1['Model']} - Median: {top1['Median']}, 95% CI: [{top1['95% CI Lower']}, {top1['95% CI Upper']}]")
+    print(f"Top 2: {top2['Model']} - Median: {top2['Median']}, 95% CI: [{top2['95% CI Lower']}, {top2['95% CI Upper']}]")
 
-estimators = [
-    ("SVM", SVC(probability=True)),
-    ("RF", RandomForestClassifier(random_state=42))
-]
+    # Decision based on primary metric
+    if top1['95% CI Lower'] > top2['95% CI Upper']:
+        print(f"\n Winner: {top1['Model']} based on {primary_metric} (clear statistical difference)")
+        return top1['Model']
+    else:
+        print("\n MCC CIs overlap — checking secondary metric (AUC)...")
 
-hyperparameters = {
-    "SVM": {"C": [1, 10], "gamma": [0.01, 0.1]},
-    "RF": {"n_estimators": [50, 100]}
-}
+        # Select secondary metric (AUC)
+        df_secondary = df[df['Metric'] == secondary_metric]
+        df_secondary = df_secondary[df_secondary['Model'].isin([top1['Model'], top2['Model']])]
+        df_secondary = df_secondary.sort_values(by='Median', ascending=False).reset_index(drop=True)
 
-cv = nrCV(dataset=(X, y), estimators=estimators, hyperparameters=hyperparameters,
-           rounds=5, N=3, K=2, inner_metric='f1_macro')
-cv.train()
-cv.summary()
+        secondary_top = df_secondary.iloc[0]
+
+        print(f"\n{secondary_metric} comparison:")
+        for idx, row in df_secondary.iterrows():
+            print(f"{row['Model']} - Median {secondary_metric}: {row['Median']}")
+
+        print(f"\n Winner: {secondary_top['Model']} based on {secondary_metric} (better separability)")
+        return secondary_top['Model']
+
