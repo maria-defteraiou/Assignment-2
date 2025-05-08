@@ -1,5 +1,4 @@
-# A Repeated Nested Cross-Validation Framework for 
-Breast Cancer Classification  
+# A Repeated Nested Cross-Validation Framework for Breast Cancer Classification  
 **MLCB25 – Assignment 2**
 ---
 
