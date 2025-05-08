@@ -28,7 +28,7 @@ The dataset `breast_cancer.csv` includes 30 numeric features extracted from fine
 - Balanced Accuracy, PRAUC  
 - Confidence Intervals via Bootstrap resampling technique
 
-## 🏗️ Repository Structure  
+## Repository Structure  
 ```
 📁 notebooks/       → Jupyter notebooks for EDA and experimentation  
 📁 src/             → Source code: rnCV pipeline, utils, model selection  
